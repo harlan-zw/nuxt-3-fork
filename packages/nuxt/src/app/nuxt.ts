@@ -89,6 +89,9 @@ interface _NuxtApp {
     } | null
     [key: string]: any
   }
+  static: {
+    data: Record<string, any>
+  }
 
   provide: (name: string, value: any) => void
 }
@@ -118,6 +121,9 @@ export function createNuxtApp (options: CreateOptions) {
       _errors: {},
       ...(process.client ? window.__NUXT__ : { serverRendered: true })
     }),
+    static: {
+      data: {}
+    },
     isHydrating: process.client,
     deferHydration () {
       if (!nuxtApp.isHydrating) { return () => {} }
@@ -154,6 +160,7 @@ export function createNuxtApp (options: CreateOptions) {
 
   // Inject $nuxt
   defineGetter(nuxtApp.vueApp, '$nuxt', nuxtApp)
+  // @ts-expect-error
   defineGetter(nuxtApp.vueApp.config.globalProperties, '$nuxt', nuxtApp)
 
   if (process.server) {

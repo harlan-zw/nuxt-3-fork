@@ -1,6 +1,6 @@
-import { defineUnimportPreset, Preset } from 'unimport'
+import { defineUnimportPreset, InlinePreset } from 'unimport'
 
-const commonPresets: Preset[] = [
+const commonPresets: InlinePreset[] = [
   // #head
   defineUnimportPreset({
     from: '#head',
@@ -61,6 +61,15 @@ const appPreset = defineUnimportPreset({
     'loadPayload',
     'preloadPayload',
     'isPrerendered'
+  ]
+})
+
+// vue-router
+const routerPreset = defineUnimportPreset({
+  from: '#app',
+  imports: [
+    'onBeforeRouteLeave',
+    'onBeforeRouteUpdate'
   ]
 })
 
@@ -137,8 +146,9 @@ const vuePreset = defineUnimportPreset({
   ] as Array<keyof typeof import('vue')>
 })
 
-export const defaultPresets = [
+export const defaultPresets: InlinePreset[] = [
   ...commonPresets,
   appPreset,
+  routerPreset,
   vuePreset
 ]

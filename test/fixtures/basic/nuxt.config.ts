@@ -3,8 +3,17 @@ import type { NuxtPage } from '@nuxt/schema'
 import { createUnplugin } from 'unplugin'
 import { withoutLeadingSlash } from 'ufo'
 
+// (defined in nuxt/src/core/nitro.ts)
+declare module 'nitropack' {
+  interface NitroRouteConfig {
+    ssr?: boolean
+  }
+}
+
 export default defineNuxtConfig({
   app: {
+    pageTransition: true,
+    layoutTransition: true,
     head: {
       charset: 'utf-8',
       link: [undefined],
@@ -58,7 +67,7 @@ export default defineNuxtConfig({
     },
     function (_options, nuxt) {
       const routesToDuplicate = ['/async-parent', '/fixed-keyed-child-parent', '/keyed-child-parent', '/with-layout', '/with-layout2']
-      const stripLayout = (page: NuxtPage) => ({
+      const stripLayout = (page: NuxtPage): NuxtPage => ({
         ...page,
         children: page.children?.map(child => stripLayout(child)),
         name: 'internal-' + page.name,
@@ -83,7 +92,7 @@ export default defineNuxtConfig({
   ],
   hooks: {
     'prepare:types' ({ tsConfig }) {
-      tsConfig.include = tsConfig.include.filter(i => i !== '../../../../**/*')
+      tsConfig.include = tsConfig.include!.filter(i => i !== '../../../../**/*')
     },
     'modules:done' () {
       addComponent({
@@ -94,7 +103,7 @@ export default defineNuxtConfig({
     }
   },
   experimental: {
-    inlineSSRStyles: id => !id.includes('assets.vue'),
+    inlineSSRStyles: id => !!id && !id.includes('assets.vue'),
     reactivityTransform: true,
     treeshakeClientOnly: true
   },
