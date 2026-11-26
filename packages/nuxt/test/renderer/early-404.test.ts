@@ -1,5 +1,6 @@
 import fc from 'fast-check'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHead } from '@unhead/vue/server'
 import { addRoute, createRouter as createRou3Router } from 'rou3'
 import { compileRouterToString } from 'rou3/compiler'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -10,7 +11,9 @@ import type { NuxtPage } from 'nuxt/schema'
 import { collectRou3PagePatterns } from '../../src/pages/route-patterns.ts'
 import { encodeRoutePath, foldRouteCase, normalizeRouteRulePath } from '@nuxt/kit/internal'
 import { throwIfUnmatchedPagePath } from '../../src/runtime/server/renderer/early-404.ts'
-import type { NuxtRendererOptions } from '../../src/runtime/server/renderer/runtime.ts'
+import { createNuxtRenderer } from '../../src/runtime/server/renderer/index.ts'
+import type { NuxtRendererInstance } from '../../src/runtime/server/renderer/instance.ts'
+import type { NuxtRendererOptions, RendererEvent, RendererRouteRules } from '../../src/runtime/server/renderer/runtime.ts'
 
 const options = {
   createError: (init: { status: number, statusText?: string, data?: unknown, headers?: Record<string, string> }) => Object.assign(new Error(init.statusText), {
@@ -23,11 +26,25 @@ const options = {
 const knownMatcher = (_method: string, path: string) => path === '/known' ? 1 : undefined
 let matcher: (method: string, path: string) => unknown = knownMatcher
 
-vi.mock('nuxt/internal/renderer-config', () => ({
-  get NUXT_PAGE_MATCHER () {
-    return matcher
-  },
-}))
+vi.mock('@unhead/vue/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@unhead/vue/server')>()
+  return {
+    ...actual,
+    createHead: vi.fn(actual.createHead),
+  }
+})
+
+vi.mock('nuxt/internal/renderer-config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/runtime/server/renderer-config.ts')>()
+  return {
+    ...actual,
+    NUXT_EARLY_404: true,
+    NUXT_PRERENDER_NO_SSR_ROUTES: ['/404.html'],
+    get NUXT_PAGE_MATCHER () {
+      return matcher
+    },
+  }
+})
 
 function event (path: string, method = 'GET') {
   return {
@@ -76,6 +93,99 @@ describe('throwIfUnmatchedPagePath', () => {
     expect(cacheControlFor('/unknown', 'POST', 60)).toBeNull()
     expect(cacheControlFor('/unknown', 'GET', 0)).toBeNull()
     expect(cacheControlFor('/unknown', 'GET')).toBeNull()
+  })
+})
+
+describe('renderRoute early404 ordering', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  function rendererEvent (path: string, method = 'GET'): RendererEvent {
+    const url = new URL(path, 'http://localhost')
+    return {
+      url,
+      req: new Request(url, { method }),
+      res: { headers: new Headers() },
+      context: {},
+    } as unknown as RendererEvent
+  }
+
+  function createTestRenderer (routeRules: RendererRouteRules = { ssr: true }) {
+    const runtimeConfig = vi.fn(() => ({ app: { baseURL: '/', cdnURL: '', buildId: 'test' } }) as unknown as ReturnType<NuxtRendererOptions['runtimeConfig']>)
+    const getRenderer = vi.fn((ssrContext: { 'noSSR'?: boolean, '~renderResponse'?: Response }) => Promise.resolve({
+      rendererContext: {},
+      renderToString: () => {
+        ssrContext['~renderResponse'] = new Response('ok', { status: 200 })
+        return Promise.resolve({ html: '' })
+      },
+    }))
+    const instance = {
+      options: {
+        ...options,
+        runtimeConfig,
+        getRouteRules: () => routeRules,
+        hooks: () => ({ callHook: () => {} }),
+        createResponse: (body: BodyInit | null, init?: ResponseInit) => new Response(body, init),
+      },
+      hooks: { callHook: () => {} },
+      getRenderer,
+    } as unknown as NuxtRendererInstance
+
+    return {
+      renderer: createNuxtRenderer(instance),
+      runtimeConfig,
+      getRenderer,
+    }
+  }
+
+  it('throws 404 before creating SSR context or head for unmatched paths', async () => {
+    const { renderer, runtimeConfig, getRenderer } = createTestRenderer()
+
+    await expect(renderer.fetch(rendererEvent('/missing?foo=1'))).rejects.toMatchObject({
+      status: 404,
+      message: 'Page not found: /missing?foo=1',
+      data: { path: '/missing?foo=1' },
+    })
+
+    expect(runtimeConfig).not.toHaveBeenCalled()
+    expect(createHead).not.toHaveBeenCalled()
+    expect(getRenderer).not.toHaveBeenCalled()
+  })
+
+  it('does not block prerender no-SSR routes such as /404.html when prerenderErrorPages is false', async () => {
+    vi.stubGlobal('__TEST_PRERENDER__', true)
+
+    const prerenderFallback = createTestRenderer({ ssr: true })
+    const fallbackResponse = await prerenderFallback.renderer.fetch(rendererEvent('/404.html'))
+    expect(fallbackResponse.status).toBe(200)
+    expect(prerenderFallback.runtimeConfig).toHaveBeenCalledOnce()
+    expect(createHead).toHaveBeenCalledOnce()
+    expect(prerenderFallback.getRenderer).toHaveBeenCalledOnce()
+    expect(prerenderFallback.getRenderer.mock.calls[0]![0]).toMatchObject({ noSSR: true })
+
+    vi.clearAllMocks()
+
+    const noSsrRule = createTestRenderer({ ssr: false })
+    const noSsrResponse = await noSsrRule.renderer.fetch(rendererEvent('/spa-shell'))
+    expect(noSsrResponse.status).toBe(200)
+    expect(noSsrRule.runtimeConfig).toHaveBeenCalledOnce()
+    expect(createHead).toHaveBeenCalledOnce()
+    expect(noSsrRule.getRenderer).toHaveBeenCalledOnce()
+    expect(noSsrRule.getRenderer.mock.calls[0]![0]).toMatchObject({ noSSR: true })
+
+    vi.clearAllMocks()
+
+    const unmatchedSsr = createTestRenderer({ ssr: true })
+    await expect(unmatchedSsr.renderer.fetch(rendererEvent('/missing'))).rejects.toMatchObject({
+      status: 404,
+      message: 'Page not found: /missing',
+      data: { path: '/missing' },
+    })
+    expect(unmatchedSsr.runtimeConfig).not.toHaveBeenCalled()
+    expect(createHead).not.toHaveBeenCalled()
+    expect(unmatchedSsr.getRenderer).not.toHaveBeenCalled()
   })
 })
 

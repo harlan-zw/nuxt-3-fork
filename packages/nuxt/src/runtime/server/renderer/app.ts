@@ -3,7 +3,7 @@ import { createStreamableHead } from '@unhead/vue/stream/server'
 import type { NuxtPayload, NuxtSSRContext } from '#app/types'
 import { NUXT_NO_SSR, NUXT_PRERENDER_NO_SSR_ROUTES, NUXT_SSR_STREAMING, unheadOptions } from 'nuxt/internal/renderer-config'
 import { appEvent, getRequestState } from './runtime'
-import type { NuxtRendererOptions, NuxtRequestState, RendererEvent } from './runtime'
+import type { NuxtRendererOptions, NuxtRequestState, RendererEvent, RendererRouteRules } from './runtime'
 import { urlHash } from './url'
 import { mergeHeaders } from './headers'
 import { captureError } from './error-page'
@@ -18,6 +18,12 @@ function createServerHead (): NuxtSSRContext['head'] {
   }
   const { head } = createStreamableHead({ ...unheadOptions, writesBodyTags: true })
   return head as NuxtSSRContext['head']
+}
+
+/** Whether a prerendered route renders as an SPA shell fallback rather than SSR HTML. */
+export function isPrerenderNoSSR (event: RendererEvent, routeOptions: Pick<RendererRouteRules, 'ssr'>): boolean {
+  const url = event.url.pathname + event.url.search + urlHash(event.url)
+  return !routeOptions.ssr || !!NUXT_NO_SSR || !!getRequestState(event)?.noSSR || PRERENDER_NO_SSR_ROUTES.has(url)
 }
 
 export function createSSRContext (options: NuxtRendererOptions, event: RendererEvent): NuxtSSRContext {
