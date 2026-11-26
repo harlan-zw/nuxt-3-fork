@@ -3,14 +3,14 @@ import { joinURL } from 'ufo'
 import { renderSSRHead } from '@unhead/vue/server'
 import type { Link } from '@unhead/vue/types'
 
-import { SSR_ERROR_PARAM, decodeSSRError, stringifyErrorData } from './error'
+import { SSR_ERROR_PARAM, decodeSSRError, isNonHtmlAssetPath, stringifyErrorData } from './error'
 import type { SSRError } from './error'
 
 import type { NuxtRenderDocumentContext, NuxtRenderHTMLContext, NuxtSSRContext, SerializedErrorCause } from '#app/types'
 import { traceAsync } from '../../../app/internal/tracing'
 
 import { renderPayloadResponse } from './payload'
-import { createSSRContext, rethrowWithResponseHeaders, returnRenderResponse, setSSRError } from './app'
+import { createSSRContext, isPrerenderNoSSR, rethrowWithResponseHeaders, returnRenderResponse, setSSRError } from './app'
 import { patchDevClientCss } from './dev-css'
 import { renderSplitInlineStyles } from './inline-styles'
 import { createInlinedCSSFilter } from './inlined-css'
@@ -62,11 +62,11 @@ function fetch (instance: NuxtRendererInstance, event: RendererEvent): Promise<R
 
   const isErrorRoute = event.url.pathname.startsWith('/__nuxt_error')
 
-  // a render the runtime re-entered to build *its* error page keeps throwing back to it, as does
-  // a payload render
+  // a render the runtime re-entered to build *its* error page keeps throwing back to it, as do
+  // payload and non-HTML asset requests
   const inlineErrors = NUXT_INLINE_ERROR_RENDERING
     && !getRequestState(event)?.['~rendering-error']
-    && !PAYLOAD_URL_RE.test(event.url.pathname)
+    && !isNonHtmlAssetPath(event.url.pathname)
   const renderErrorPage = (error: unknown) => renderErrorResponse(runtime, event, error, ssrError => renderRoute(instance, event, ssrError))
 
   // only the error handler of the runtime may render the error route
@@ -96,6 +96,15 @@ function fetch (instance: NuxtRendererInstance, event: RendererEvent): Promise<R
 
 async function renderRoute (instance: NuxtRendererInstance, event: RendererEvent, ssrError?: SSRError): Promise<Response> {
   const runtime = instance.options
+  const routeOptions = runtime.getRouteRules(event)
+
+  // Fail fast for paths that cannot match any page route, before allocating
+  // the SSR context/head or loading the app (and its plugins and middleware).
+  // Skipped when prerendering SPA shell fallbacks (`/index.html`, `/200.html`),
+  // which are not page routes.
+  if (NUXT_EARLY_404 && !ssrError && !(import.meta.prerender && isPrerenderNoSSR(event, routeOptions))) {
+    throwIfUnmatchedPagePath(runtime, event, routeOptions)
+  }
 
   const ssrContext: NuxtSSRContext = createSSRContext(runtime, event)
   const hookEvent = appEvent(event)
@@ -112,7 +121,6 @@ async function renderRoute (instance: NuxtRendererInstance, event: RendererEvent
     setSSRError(ssrContext, ssrError)
   }
 
-  const routeOptions = runtime.getRouteRules(event)
   const NO_SCRIPTS = NUXT_NO_SCRIPTS || !!routeOptions.noScripts
   const DEFER_PREFETCH = NUXT_DEFER_PREFETCH_HINTS && !NO_SCRIPTS
 
@@ -126,13 +134,6 @@ async function renderRoute (instance: NuxtRendererInstance, event: RendererEvent
     for (const input of appComponentHead) {
       ssrContext.head.push(input)
     }
-  }
-
-  // Fail fast for paths that cannot match any page route, before the app (and
-  // its plugins and middleware) is loaded. Skipped when prerendering SPA shell
-  // fallbacks (`/index.html`, `/200.html`), which are not page routes.
-  if (NUXT_EARLY_404 && !ssrError && !(import.meta.prerender && ssrContext.noSSR)) {
-    throwIfUnmatchedPagePath(runtime, event, routeOptions)
   }
 
   // Whether we are prerendering route or using ISR/SWR caching

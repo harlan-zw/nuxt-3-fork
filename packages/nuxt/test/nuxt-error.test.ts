@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { HTTPError } from 'h3'
 import { NUXT_ERROR_SIGNATURE, NuxtError, createError, createErrorFromThrown, isNuxtError } from '#app/composables/error'
 import { reducers } from '#app/plugins/revive-payload.server'
-import { decodeSSRError, describeError, encodeSSRError, NUXT_ERROR_SIGNATURE as rendererSignature, stringifyErrorData } from '../src/runtime/server/renderer/error'
+import { decodeSSRError, describeError, encodeSSRError, isJsonRequest, isNonHtmlAssetPath, NUXT_ERROR_SIGNATURE as rendererSignature, stringifyErrorData } from '../src/runtime/server/renderer/error'
 
 const reduceNuxtError = reducers.find(([name]) => name === 'NuxtError')![1]
 
@@ -218,5 +218,116 @@ describe('experimental.parseErrorData compatibility', () => {
     const encoded = JSON.stringify({ status: 500, data: { reason: 'missing' } })
 
     expect(decodeSSRError(encoded)!.data).toEqual({ reason: 'missing' })
+  })
+})
+
+describe('isNonHtmlAssetPath', () => {
+  it.each([
+    '/missing.png',
+    '/images/HERO.WEBP',
+    '/favicon.ico',
+    '/assets/icon.svg',
+    '/fonts/inter.woff2',
+    '/fonts/inter.ttf',
+    '/_nuxt/chunk.js',
+    '/entry.mjs',
+    '/chunk.cjs',
+    '/styles/main.css',
+    '/assets/app.js.map',
+    '/robots.txt',
+    '/sitemap.xml',
+    '/docs/guide.pdf',
+    '/backup.zip',
+    '/bundle.gz',
+    '/bundle.br',
+    '/video/intro.mp4',
+    '/video/intro.webm',
+    '/audio/track.mp3',
+    '/pkg/module.wasm',
+    '/manifest.webmanifest',
+    '/data/_payload.json',
+    '/wp-login.php',
+    '/xmlrpc.php',
+    '/admin/login.aspx',
+    '/.env',
+    '/.env.local',
+    '/.env.production',
+    '/sub/.env',
+    '/sub/.env.bak',
+  ])('identifies %s as a non-HTML asset path', (pathname) => {
+    expect(isNonHtmlAssetPath(pathname)).toBe(true)
+  })
+
+  it.each([
+    '/',
+    '/missing',
+    '/about',
+    '/404.html',
+    '/200.html',
+    '/500.html',
+    '/page.htm',
+    '/page.xhtml',
+    '/users/john.doe',
+    '/blog/nuxt-4.2',
+    '/v1.2/docs',
+    '/dir.png/about',
+    '/.well-known/acme',
+    '/.gitignore',
+    '/missing.png/',
+    '/file.',
+  ])('does not treat %s as a non-HTML asset path', (pathname) => {
+    expect(isNonHtmlAssetPath(pathname)).toBe(false)
+  })
+})
+
+describe('isJsonRequest', () => {
+  function check (pathname: string, headers?: HeadersInit) {
+    return isJsonRequest(new Request(`http://localhost${pathname}`, { headers }), pathname)
+  }
+
+  it.each([
+    ['/missing', { accept: 'application/json' }],
+    ['/missing', { accept: 'application/json, text/plain, */*' }],
+    ['/missing', { accept: 'text/plain' }],
+    ['/missing', { accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8' }],
+    ['/missing', { accept: 'image/*' }],
+    ['/missing', { accept: 'text/css,*/*;q=0.1' }],
+    ['/missing', { accept: 'application/javascript' }],
+    ['/missing', { accept: 'font/woff2' }],
+    ['/missing', { accept: 'audio/*, video/*' }],
+    ['/missing', { accept: 'application/xml' }],
+    ['/missing', { 'user-agent': 'curl/8.0.1', 'accept': '*/*' }],
+    ['/missing', { 'user-agent': 'HTTPie/3.2.2' }],
+    ['/missing', { 'sec-fetch-mode': 'cors', 'accept': '*/*' }],
+    ['/missing', { 'sec-fetch-mode': 'no-cors', 'accept': '*/*' }],
+    ['/api/users', { accept: '*/*' }],
+    ['/data.json', { accept: '*/*' }],
+    ['/wp-login.php', { accept: '*/*' }],
+    ['/wp-login.php', undefined],
+    ['/.env', undefined],
+    ['/missing.png', { accept: '*/*' }],
+    ['/favicon.ico', { accept: '*/*' }],
+    ['/chunk.js', { accept: '*/*' }],
+    ['/fonts/inter.woff2', undefined],
+  ])('returns true for %s with headers %j', (pathname, headers) => {
+    expect(check(pathname, headers)).toBe(true)
+  })
+
+  it.each([
+    ['/missing', { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' }],
+    ['/missing', { accept: 'TEXT/HTML' }],
+    ['/missing', { accept: 'application/xhtml+xml' }],
+    ['/missing', { accept: '*/*' }],
+    ['/missing', { accept: '*/*;q=0.8' }],
+    ['/missing', { accept: 'text/*' }],
+    ['/missing', { accept: 'text/*, */*;q=0.8' }],
+    ['/missing', undefined],
+    ['/404.html', { accept: '*/*' }],
+    ['/users/john.doe', { accept: '*/*' }],
+    ['/api/users', { accept: 'text/html' }],
+    ['/missing.png', { accept: 'text/html,application/xhtml+xml,*/*;q=0.8' }],
+    ['/wp-login.php', { accept: 'text/html' }],
+  ])('returns false for %s with headers %j', (pathname, headers) => {
+    expect(check(pathname, headers)).toBe(false)
   })
 })

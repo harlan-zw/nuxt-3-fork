@@ -190,23 +190,78 @@ export function stringifyErrorData (data: unknown): unknown {
   return data === undefined || typeof data === 'string' ? data : JSON.stringify(data)
 }
 
+const NON_HTML_ASSET_EXTENSIONS = new Set([
+  // images
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'svg', 'ico', 'bmp', 'tif', 'tiff',
+  // fonts
+  'woff', 'woff2', 'ttf', 'otf', 'eot',
+  // scripts, styles, source maps, wasm
+  'css', 'js', 'mjs', 'cjs', 'map', 'wasm',
+  // media
+  'mp4', 'webm', 'mov', 'mp3', 'wav', 'ogg', 'flac', 'm4a',
+  // data, documents, archives
+  'json', 'webmanifest', 'xml', 'txt', 'pdf', 'zip', 'gz', 'br', 'tar', '7z', 'rar', 'csv',
+  // common non-JS server/config scanner targets
+  'php', 'asp', 'aspx', 'jsp', 'cgi', 'env',
+])
+
 /**
- * Whether the client asked for JSON rather than a page, so an error must be answered with a
- * JSON body. An explicit request for HTML wins over every other signal.
+ * Whether `pathname` ends in a well-known non-HTML asset or probe file extension
+ * (such as `.png`, `.css`, `.js`, `.woff2`, `.php`, or `/.env`), so an error
+ * response can skip server-rendering the HTML error page.
+ *
+ * @internal
+ */
+export function isNonHtmlAssetPath (pathname: string): boolean {
+  const lastSlash = pathname.lastIndexOf('/')
+  const lastDot = pathname.lastIndexOf('.')
+  if (lastDot <= lastSlash) {
+    return false
+  }
+  // Dotfile probes such as `/.env` or `/.env.production`
+  if (lastDot === lastSlash + 1) {
+    return pathname.slice(lastDot + 1).toLowerCase() === 'env'
+  }
+  if (pathname.slice(lastSlash + 1, lastSlash + 6).toLowerCase() === '.env.') {
+    return true
+  }
+  return NON_HTML_ASSET_EXTENSIONS.has(pathname.slice(lastDot + 1).toLowerCase())
+}
+
+/**
+ * Whether `accept` (lowercased, already known not to include HTML) explicitly
+ * requests a non-HTML media type rather than only wildcards (`*\/*`, `text/*`).
+ */
+function isNonHtmlAccept (accept: string): boolean {
+  for (const range of accept.split(',')) {
+    const semi = range.indexOf(';')
+    const mediaType = (semi === -1 ? range : range.slice(0, semi)).trim()
+    if (mediaType && mediaType.includes('/') && mediaType !== '*/*' && mediaType !== 'text/*') {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Whether the client asked for a non-HTML response rather than a page, so an error must be
+ * answered with a JSON body instead of rendering the HTML error page. An explicit request
+ * for HTML wins over every other signal.
  *
  * @internal
  */
 export function isJsonRequest (request: Request, pathname: string): boolean {
-  if (request.headers.get('accept')?.includes('text/html')) {
+  const accept = request.headers.get('accept')?.toLowerCase()
+  if (accept && (accept.includes('text/html') || accept.includes('application/xhtml+xml'))) {
     return false
   }
   return (
-    hasHeader(request, 'accept', 'application/json')
+    (!!accept && isNonHtmlAccept(accept))
     || hasHeader(request, 'user-agent', 'curl/')
     || hasHeader(request, 'user-agent', 'httpie/')
     || hasHeader(request, 'sec-fetch-mode', 'cors')
     || pathname.startsWith('/api/')
-    || pathname.endsWith('.json')
+    || isNonHtmlAssetPath(pathname)
   )
 }
 

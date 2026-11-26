@@ -167,6 +167,31 @@ describe('inline error rendering', () => {
     await expect(renderer.fetch(createEvent('/throws/_payload.json'))).rejects.toMatchObject({ message: 'the render threw' })
   })
 
+  it.each([
+    '/throws/missing.png',
+    '/throws/favicon.ico',
+    '/throws/wp-login.php',
+    '/throws/.env',
+    '/throws/chunk.js',
+    '/throws/style.css',
+  ])('delegates non-HTML asset error %s to the server runtime instead of rendering an HTML error page', async (path) => {
+    const renderer = createNuxtRenderer(options)
+
+    await expect(renderer.fetch(createEvent(path))).rejects.toMatchObject({ message: 'the render threw' })
+  })
+
+  it.each([
+    '/throws/404.html',
+    '/throws/john.doe',
+    '/throws/v1.2/page',
+  ])('still renders the inline HTML error page for %s', async (path) => {
+    const { response, html } = await render(path)
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get('content-type')).toBe('text/html;charset=utf-8')
+    expect(html).toContain('<div id="error-page">')
+  })
+
   it('leaves an error the runtime is already rendering its own error page for to the runtime', async () => {
     const renderer = createNuxtRenderer(options)
     const event = createEvent('/throws')

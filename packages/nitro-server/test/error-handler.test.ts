@@ -300,6 +300,34 @@ describe('HTML error page', () => {
       expect(res.headers.has(name)).toBe(false)
     }
   })
+
+  it.each([
+    ['/wp-login.php', '*/*'],
+    ['/.env', '*/*'],
+    ['/missing.png', '*/*'],
+    ['/favicon.ico', 'image/avif,image/webp,image/*,*/*;q=0.8'],
+    ['/assets/chunk.js', '*/*'],
+    ['/styles/app.css', 'text/css,*/*;q=0.1'],
+    ['/avatar/123', 'image/webp,*/*;q=0.8'],
+    ['/unknown', 'text/plain'],
+  ])('skips HTML error SSR for non-HTML request %s (accept: %s)', async (path, accept) => {
+    const res = await handle(new HTTPError({ status: 404 }), accept, { status: 404, body: { status: 404 } }, path)
+
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ status: 404 })
+    expect(serverFetch).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['/missing', '*/*'],
+    ['/404.html', '*/*'],
+    ['/missing.png', 'text/html,application/xhtml+xml,*/*;q=0.8'],
+  ])('still renders HTML error SSR for %s (accept: %s)', async (path, accept) => {
+    const res = await handle(new HTTPError({ status: 404 }), accept, {}, path)
+
+    expect(res.status).toBe(404)
+    expect(serverFetch).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('dev error handler', () => {

@@ -24,8 +24,8 @@ function rendererFailingWith (error: unknown, cookies: string[], pageCookies: st
   }
 }
 
-async function render (renderer: NuxtRenderer, init?: RequestInit) {
-  const response = await createFetchHandler(renderer, () => ({}))(new Request('http://localhost/account', init))
+async function render (renderer: NuxtRenderer, init?: RequestInit, path = '/account') {
+  const response = await createFetchHandler(renderer, () => ({}))(new Request(`http://localhost${path}`, init))
   return { status: response.status, cookies: response.headers.getSetCookie(), contentType: response.headers.get('content-type'), body: await response.text() }
 }
 
@@ -112,5 +112,30 @@ describe('error response for a JSON client', () => {
 
     expect(response).toMatchObject({ status: 500, cookies: cleared })
     expect(JSON.parse(response.body)).toEqual({ error: true, status: 500, statusText: 'Internal Server Error', message: 'Internal Server Error' })
+  })
+
+  it.each([
+    ['/missing.png', { accept: 'image/webp,*/*;q=0.8' }],
+    ['/wp-login.php', { accept: '*/*' }],
+    ['/.env', undefined],
+    ['/avatar/123', { accept: 'image/*' }],
+    ['/styles/app.css', { accept: 'text/css,*/*;q=0.1' }],
+  ])('skips HTML error SSR for non-HTML asset request %s', async (path, headers) => {
+    let errorRouteFetched = false
+    const error = createError({ status: 404, statusText: 'Not Found' })
+    const renderer: NuxtRenderer = {
+      fetch: (event) => {
+        if (event.url.pathname === '/__nuxt_error') {
+          errorRouteFetched = true
+          return Promise.resolve(new Response('<html>error</html>'))
+        }
+        return Promise.reject(error)
+      },
+    }
+
+    const response = await render(renderer, headers ? { headers } : undefined, path)
+
+    expect(errorRouteFetched).toBe(false)
+    expect(response).toMatchObject({ status: 404, contentType: 'application/json;charset=utf-8' })
   })
 })
